@@ -27,6 +27,10 @@ namespace FORWARD
 		const float scale_modifier,
 		const glm::vec4* rotations,
 		const float* opacities,
+		// black
+		const float* blacks,
+		float* geomblack,
+		
 		const float* shs,
 		bool* clamped,
 		const float* cov3D_precomp,
@@ -55,11 +59,17 @@ namespace FORWARD
 		int W, int H,
 		const float2* points_xy_image,
 		const float* features,
+		// black
+		const float* black,
+
 		const float4* conic_opacity,
 		float* final_T,
 		uint32_t* n_contrib,
 		const float* bg_color,
-		float* out_color);
+		float* out_color,
+		// black
+		float* out_color_black,
+		float* out_black);
 }
 
 

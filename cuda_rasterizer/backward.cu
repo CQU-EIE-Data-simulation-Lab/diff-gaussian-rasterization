@@ -405,13 +405,19 @@ renderCUDA(
 	const float* __restrict__ bg_color,
 	const float2* __restrict__ points_xy_image,
 	const float4* __restrict__ conic_opacity,
+	// black
+	const float* __restrict__ black,
 	const float* __restrict__ colors,
 	const float* __restrict__ final_Ts,
 	const uint32_t* __restrict__ n_contrib,
-	const float* __restrict__ dL_dpixels,
+	// const float* __restrict__ dL_dpixels,
+	const float* __restrict__ dL_dbalck_pixels,
+	const float* __restrict__ dL_dlight_pixels,
 	float3* __restrict__ dL_dmean2D,
 	float4* __restrict__ dL_dconic2D,
 	float* __restrict__ dL_dopacity,
+	// black
+	float* __restrict__ dL_dblacks,
 	float* __restrict__ dL_dcolors)
 {
 	// We rasterize again. Compute necessary block info.
@@ -435,6 +441,8 @@ renderCUDA(
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
+	// black
+	__shared__ float collected_blacks[BLOCK_SIZE];
 
 	// In the forward, we stored the final value for T, the
 	// product of all (1 - alpha) factors. 
@@ -447,10 +455,14 @@ renderCUDA(
 	const int last_contributor = inside ? n_contrib[pix_id] : 0;
 
 	float accum_rec[C] = { 0 };
-	float dL_dpixel[C];
+	// float dL_dpixel[C];
+	float dL_dblack_pixel[C];
+	float dL_dlight_pixel[C];
 	if (inside)
-		for (int i = 0; i < C; i++)
-			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
+		for (int i = 0; i < C; i++){
+			dL_dblack_pixel[i] = dL_dbalck_pixels[i * H * W + pix_id];
+			dL_dlight_pixel[i] = dL_dlight_pixels[i * H * W + pix_id];
+			}
 
 	float last_alpha = 0;
 	float last_color[C] = { 0 };
@@ -473,6 +485,8 @@ renderCUDA(
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
+			// black
+			collected_blacks[block.thread_rank()] = black[coll_id];
 			for (int i = 0; i < C; i++)
 				collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
 		}
@@ -507,7 +521,11 @@ renderCUDA(
 			// gradients w.r.t. alpha (blending factor for a Gaussian/pixel
 			// pair).
 			float dL_dalpha = 0.0f;
+			float dL_dblack_alpha = 0.0f;
+			float dL_dligth_alpha = 0.0f;
 			const int global_id = collected_id[j];
+			// black
+			const float b = collected_blacks[j];
 			for (int ch = 0; ch < C; ch++)
 			{
 				const float c = collected_colors[ch * BLOCK_SIZE + j];
@@ -515,24 +533,37 @@ renderCUDA(
 				accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
 				last_color[ch] = c;
 
-				const float dL_dchannel = dL_dpixel[ch];
-				dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
+				// const float dL_dchannel = dL_dblack_pixel[ch];
+				const float dL_dblack_channel = dL_dblack_pixel[ch];
+				const float dL_dligth_channel = dL_dlight_pixel[ch];
+				// dL_dalpha
+				dL_dblack_alpha += (c - accum_rec[ch]) * dL_dblack_channel;
+				dL_dligth_alpha += (c - accum_rec[ch]) * dL_dligth_channel;
 				// Update the gradients w.r.t. color of the Gaussian. 
 				// Atomic, since this pixel is just one of potentially
 				// many that were affected by this Gaussian.
-				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
+				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dblack_channel * b + dchannel_dcolor * dL_dligth_channel);
+				// black
+				atomicAdd(&(dL_dblacks[global_id]), dchannel_dcolor * dL_dblack_channel * c);
 			}
-			dL_dalpha *= T;
+			dL_dblack_alpha *= T;
+			dL_dligth_alpha *= T;
 			// Update last alpha (to be used in the next iteration)
 			last_alpha = alpha;
 
 			// Account for fact that alpha also influences how much of
 			// the background color is added if nothing left to blend
-			float bg_dot_dpixel = 0;
-			for (int i = 0; i < C; i++)
-				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
-			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
-
+			float bg_dot_dpixel_black = 0;
+			float bg_dot_dpixel_light = 0;
+			for (int i = 0; i < C; i++){
+				bg_dot_dpixel_black += bg_color[i] * dL_dblack_pixel[i];
+				bg_dot_dpixel_light += bg_color[i] * dL_dlight_pixel[i];
+				}
+			dL_dblack_alpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel_black;
+			dL_dligth_alpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel_light;
+			
+			dL_dblack_alpha *= b;
+			dL_dalpha = dL_dligth_alpha + dL_dblack_alpha;
 
 			// Helpful reusable temporary variables
 			const float dL_dG = con_o.w * dL_dalpha;
@@ -629,13 +660,19 @@ void BACKWARD::render(
 	const float* bg_color,
 	const float2* means2D,
 	const float4* conic_opacity,
+	// black
+	const float* blacks,
 	const float* colors,
 	const float* final_Ts,
 	const uint32_t* n_contrib,
-	const float* dL_dpixels,
+	// const float* dL_dpixels,
+	const float* dL_dblack_pixels,
+	const float* dL_dlight_pixels,
 	float3* dL_dmean2D,
 	float4* dL_dconic2D,
 	float* dL_dopacity,
+	// black
+	float* dL_dblack,
 	float* dL_dcolors)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
@@ -645,13 +682,19 @@ void BACKWARD::render(
 		bg_color,
 		means2D,
 		conic_opacity,
+		// black
+		blacks,
 		colors,
 		final_Ts,
 		n_contrib,
-		dL_dpixels,
+		// dL_dpixels,
+		dL_dblack_pixels,
+		dL_dlight_pixels,
 		dL_dmean2D,
 		dL_dconic2D,
 		dL_dopacity,
+		// black
+		dL_dblack,
 		dL_dcolors
 		);
 }

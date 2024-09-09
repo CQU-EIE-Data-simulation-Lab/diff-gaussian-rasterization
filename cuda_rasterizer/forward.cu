@@ -159,6 +159,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const float scale_modifier,
 	const glm::vec4* rotations,
 	const float* opacities,
+	// black
+	const float* blacks,
+	float* geomblack,
+
 	const float* shs,
 	bool* clamped,
 	const float* cov3D_precomp,
@@ -244,7 +248,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		rgb[idx * C + 0] = result.x;
 		rgb[idx * C + 1] = result.y;
 		rgb[idx * C + 2] = result.z;
-	}
+	}	
+
+	// black
+	geomblack[idx] = blacks[idx];
 
 	// Store some useful helper data for the next steps.
 	depths[idx] = p_view.z;
@@ -266,11 +273,16 @@ renderCUDA(
 	int W, int H,
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
+	// black
+	const float* __restrict__ black,
 	const float4* __restrict__ conic_opacity,
 	float* __restrict__ final_T,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
-	float* __restrict__ out_color)
+	float* __restrict__ out_color,
+	// black
+	float* __restrict__ out_color_black,
+	float* __restrict__ out_black)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -301,6 +313,9 @@ renderCUDA(
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[CHANNELS] = { 0 };
+	// black
+	float black_C[CHANNELS] = { 0 };
+	float black_render = 0;
 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
@@ -352,7 +367,12 @@ renderCUDA(
 
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
+			{	
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+				// black
+				black_C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T * black[collected_id[j]];
+			}
+			black_render += alpha * T * black[collected_id[j]];
 
 			T = test_T;
 
@@ -369,7 +389,12 @@ renderCUDA(
 		final_T[pix_id] = T;
 		n_contrib[pix_id] = last_contributor;
 		for (int ch = 0; ch < CHANNELS; ch++)
+		{	
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+			// black
+			out_color_black[ch * H * W + pix_id] = black_C[ch] + T * bg_color[ch];
+		}
+		out_black[pix_id] = black_render;
 	}
 }
 
@@ -380,11 +405,18 @@ void FORWARD::render(
 	int W, int H,
 	const float2* means2D,
 	const float* colors,
+	// black
+	const float* black,
+
 	const float4* conic_opacity,
 	float* final_T,
 	uint32_t* n_contrib,
 	const float* bg_color,
-	float* out_color)
+	float* out_color,
+	// black
+	float* out_color_black,
+	float* out_black
+	)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -392,11 +424,16 @@ void FORWARD::render(
 		W, H,
 		means2D,
 		colors,
+		// black
+		black,
 		conic_opacity,
 		final_T,
 		n_contrib,
 		bg_color,
-		out_color);
+		out_color,
+		// black
+		out_color_black,
+		out_black);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
@@ -405,6 +442,10 @@ void FORWARD::preprocess(int P, int D, int M,
 	const float scale_modifier,
 	const glm::vec4* rotations,
 	const float* opacities,
+	// black
+	const float* blacks,
+	float* geomblack,
+
 	const float* shs,
 	bool* clamped,
 	const float* cov3D_precomp,
@@ -432,6 +473,9 @@ void FORWARD::preprocess(int P, int D, int M,
 		scale_modifier,
 		rotations,
 		opacities,
+		// black
+		blacks,
+		geomblack,
 		shs,
 		clamped,
 		cov3D_precomp,

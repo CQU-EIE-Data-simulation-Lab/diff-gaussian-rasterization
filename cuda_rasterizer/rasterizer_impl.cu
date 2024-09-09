@@ -161,6 +161,9 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	obtain(chunk, geom.means2D, P, 128);
 	obtain(chunk, geom.cov3D, P * 6, 128);
 	obtain(chunk, geom.conic_opacity, P, 128);
+	// black
+	obtain(chunk, geom.black, P, 128);
+
 	obtain(chunk, geom.rgb, P * 3, 128);
 	obtain(chunk, geom.tiles_touched, P, 128);
 	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
@@ -206,6 +209,9 @@ int CudaRasterizer::Rasterizer::forward(
 	const float* shs,
 	const float* colors_precomp,
 	const float* opacities,
+	// black
+	const float* blacks,
+
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
@@ -216,6 +222,10 @@ int CudaRasterizer::Rasterizer::forward(
 	const float tan_fovx, float tan_fovy,
 	const bool prefiltered,
 	float* out_color,
+	// black
+	float* out_color_black,
+	float* out_black,
+
 	int* radii,
 	bool debug)
 {
@@ -252,6 +262,10 @@ int CudaRasterizer::Rasterizer::forward(
 		scale_modifier,
 		(glm::vec4*)rotations,
 		opacities,
+		// black
+		blacks,
+		geomState.black,
+
 		shs,
 		geomState.clamped,
 		cov3D_precomp,
@@ -326,11 +340,17 @@ int CudaRasterizer::Rasterizer::forward(
 		width, height,
 		geomState.means2D,
 		feature_ptr,
+		// black
+		geomState.black,
+
 		geomState.conic_opacity,
 		imgState.accum_alpha,
 		imgState.n_contrib,
 		background,
-		out_color), debug)
+		out_color,
+		// black
+		out_color_black,
+		out_black), debug)
 
 	return num_rendered;
 }
@@ -356,10 +376,15 @@ void CudaRasterizer::Rasterizer::backward(
 	char* geom_buffer,
 	char* binning_buffer,
 	char* img_buffer,
-	const float* dL_dpix,
+	// const float* dL_dpix,
+	const float* dL_dblack_pix,
+	const float* dL_dlight_pix,
 	float* dL_dmean2D,
 	float* dL_dconic,
 	float* dL_dopacity,
+	// black
+	float* dL_dblack,
+
 	float* dL_dcolor,
 	float* dL_dmean3D,
 	float* dL_dcov3D,
@@ -396,13 +421,20 @@ void CudaRasterizer::Rasterizer::backward(
 		background,
 		geomState.means2D,
 		geomState.conic_opacity,
+		// black
+		geomState.black,
+		
 		color_ptr,
 		imgState.accum_alpha,
 		imgState.n_contrib,
-		dL_dpix,
+		// dL_dpix,
+		dL_dblack_pix,
+		dL_dlight_pix,
 		(float3*)dL_dmean2D,
 		(float4*)dL_dconic,
 		dL_dopacity,
+		// black
+		dL_dblack,
 		dL_dcolor), debug)
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance

@@ -39,6 +39,8 @@ namespace CudaRasterizer
 			const float* shs,
 			const float* colors_precomp,
 			const float* opacities,
+			// black
+			const float* blacks,
 			const float* scales,
 			const float scale_modifier,
 			const float* rotations,
@@ -49,6 +51,9 @@ namespace CudaRasterizer
 			const float tan_fovx, float tan_fovy,
 			const bool prefiltered,
 			float* out_color,
+			// black
+			float* out_color_black,
+			float* out_black,
 			int* radii = nullptr,
 			bool debug = false);
 
@@ -71,10 +76,13 @@ namespace CudaRasterizer
 			char* geom_buffer,
 			char* binning_buffer,
 			char* image_buffer,
-			const float* dL_dpix,
+			const float* dL_dblack_pix,
+			const float* dL_dlight_pix,
 			float* dL_dmean2D,
 			float* dL_dconic,
 			float* dL_dopacity,
+			// black
+			float* dL_dblack,
 			float* dL_dcolor,
 			float* dL_dmean3D,
 			float* dL_dcov3D,
